@@ -69,6 +69,7 @@ beforeEach(() => {
 	delete process.env[CURSOR_PRESERVE_PI_AGENTS_MD_ENV];
 	delete process.env[CURSOR_SETTING_SOURCES_ENV];
 	delete process.env.PI_CURSOR_RUNTIME;
+	delete process.env.PI_CURSOR_TOOL_MODE;
 });
 
 describe("classifyContextFileOverlap", () => {
@@ -355,6 +356,28 @@ describe("registerCursorAgentsContextDedup", () => {
 
 		expect(result?.systemPrompt).toBeTypeOf("string");
 		expect(result?.systemPrompt).not.toContain("Project guidance");
+	});
+
+	it.each(["pi-only", "none"])("preserves Pi instructions when %s disables Cursor setting sources", async (toolMode) => {
+		process.env[CURSOR_SETTING_SOURCES_ENV] = "all";
+		process.env.PI_CURSOR_TOOL_MODE = toolMode;
+		const pi = createEventHarness();
+		registerCursorAgentsContextDedup(pi);
+		const prompt = buildPiSystemPromptWithContextFiles([PROJECT_FILE]);
+
+		const result = await pi.invokeEvent(
+			"before_agent_start",
+			{
+				type: "before_agent_start",
+				prompt: "hello",
+				systemPrompt: prompt,
+				systemPromptOptions: makeSystemPromptOptions([PROJECT_FILE]),
+			},
+			cursorModelOverrides,
+		);
+
+		expect(result).toBeUndefined();
+		expect(prompt).toContain("Project guidance");
 	});
 
 	it("preserves project instructions through registration in cloud runtime", async () => {

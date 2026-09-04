@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add persistent and one-run local tool policies: backward-compatible `cursor`, Pi-governed `pi-only`, and tool-free `none`. Restrictive modes disable Cursor-owned tool/settings surfaces, and pool/resume identity now prevents reuse across incompatible policies.
+
 ## 0.3.6 - 2026-08-18
 
 ### Fixed

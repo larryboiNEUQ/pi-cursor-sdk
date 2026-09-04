@@ -36,12 +36,14 @@ export const CURSOR_SANDBOX_ENV = "PI_CURSOR_SANDBOX";
 export const CURSOR_LOCAL_FORCE_ENV = "PI_CURSOR_LOCAL_FORCE";
 export const CURSOR_LOCAL_RESUME_ENV = "PI_CURSOR_LOCAL_RESUME";
 export const CURSOR_HTTP1_ENV = "PI_CURSOR_HTTP_1_1";
+export const CURSOR_TOOL_MODE_ENV = "PI_CURSOR_TOOL_MODE";
 
 export type CursorConfigSource = "cli" | "environment" | "project" | "user" | "session" | "model-alias" | "builtin";
 export type CursorConfigTrustLevel = "one-shot" | "environment" | "trusted-project" | "user" | "session" | "model-catalog" | "builtin";
 export type CursorRuntime = "local" | "cloud";
 export type CursorCloudContextHandoff = "never" | "fresh" | "bootstrap";
 export type CursorCloudEnvironmentType = "cloud" | "pool" | "machine";
+export type CursorLocalToolMode = "cursor" | "pi-only" | "none";
 
 export interface CursorCloudEnvironmentConfig {
 	type?: CursorCloudEnvironmentType | string;
@@ -65,6 +67,7 @@ export interface CursorSdkConfig {
 		acknowledged?: boolean;
 	};
 	local?: {
+		toolMode?: CursorLocalToolMode;
 		autoReview?: boolean;
 		sandbox?: boolean;
 		sandboxOptions?: {
@@ -108,6 +111,7 @@ export interface CursorResolvedSdkConfig {
 		acknowledged: CursorResolvedSetting<boolean>;
 	};
 	local: {
+		toolMode: CursorResolvedSetting<CursorLocalToolMode>;
 		autoReview: CursorResolvedSetting<boolean>;
 		sandboxEnabled: CursorResolvedSetting<boolean>;
 		force: CursorResolvedSetting<boolean>;
@@ -129,12 +133,17 @@ type WidenLiterals<T> = T extends string
 
 export type CursorExplicitSdkConfig = WidenLiterals<CursorSdkConfig>;
 
+/** Parsed disk config retains non-empty toolMode text so resolution can reject it with source context. */
+export type CursorLoadedSdkConfig = Omit<CursorSdkConfig, "local"> & {
+	local?: Omit<NonNullable<CursorSdkConfig["local"]>, "toolMode"> & { toolMode?: string };
+};
+
 export interface ResolveCursorSdkConfigOptions {
 	cli?: CursorExplicitSdkConfig;
 	env?: Record<string, string | undefined>;
 	session?: CursorSdkConfig;
-	project?: CursorSdkConfig;
-	user?: CursorSdkConfig;
+	project?: CursorLoadedSdkConfig;
+	user?: CursorLoadedSdkConfig;
 	builtIn?: CursorSdkConfig;
 }
 
@@ -179,6 +188,10 @@ export function isCursorRuntime(value: unknown): value is CursorRuntime {
 
 export function isCursorCloudContextHandoff(value: unknown): value is CursorCloudContextHandoff {
 	return value === "never" || value === "fresh" || value === "bootstrap";
+}
+
+export function isCursorLocalToolMode(value: unknown): value is CursorLocalToolMode {
+	return value === "cursor" || value === "pi-only" || value === "none";
 }
 
 function validateExplicitValue<T extends string>(
@@ -237,10 +250,10 @@ function parseCloudEnvironment(value: unknown): CursorCloudEnvironmentConfig | u
 	return Object.keys(parsed).length > 0 ? parsed : undefined;
 }
 
-export function parseCursorSdkConfig(value: unknown): CursorSdkConfig | undefined {
+export function parseCursorSdkConfig(value: unknown): CursorLoadedSdkConfig | undefined {
 	const record = asRecord(value);
 	if (!record) return undefined;
-	const config: CursorSdkConfig = {};
+	const config: CursorLoadedSdkConfig = {};
 
 	if (isCursorRuntime(record.runtime)) config.runtime = record.runtime;
 
@@ -274,7 +287,9 @@ export function parseCursorSdkConfig(value: unknown): CursorSdkConfig | undefine
 
 	const local = asRecord(record.local);
 	if (local) {
-		const parsedLocal: NonNullable<CursorSdkConfig["local"]> = {};
+		const parsedLocal: NonNullable<CursorLoadedSdkConfig["local"]> = {};
+		const toolMode = parseNonEmptyString(local.toolMode);
+		if (toolMode) parsedLocal.toolMode = toolMode;
 		if (typeof local.autoReview === "boolean") parsedLocal.autoReview = local.autoReview;
 		if (typeof local.sandbox === "boolean") parsedLocal.sandbox = local.sandbox;
 		if (typeof local.force === "boolean") parsedLocal.force = local.force;
@@ -296,7 +311,7 @@ export function getCursorSdkProjectConfigPath(cwd: string, configDirName = CONFI
 	return join(cwd, configDirName, CURSOR_SDK_CONFIG_FILE);
 }
 
-function readCursorSdkConfigFile(path: string): CursorSdkConfig {
+function readCursorSdkConfigFile(path: string): CursorLoadedSdkConfig {
 	if (!existsSync(path)) return {};
 	try {
 		return parseCursorSdkConfig(JSON.parse(readFileSync(path, "utf-8"))) ?? {};
@@ -324,17 +339,17 @@ export function loadCursorSdkConfigForUpdate(path: string): Record<string, unkno
 	return record;
 }
 
-export function loadCursorSdkUserConfig(path = getCursorSdkUserConfigPath()): CursorSdkConfig {
+export function loadCursorSdkUserConfig(path = getCursorSdkUserConfigPath()): CursorLoadedSdkConfig {
 	return readCursorSdkConfigFile(path);
 }
 
-export function loadCursorSdkProjectConfig(cwd: string, projectTrusted: boolean): CursorSdkConfig | undefined {
+export function loadCursorSdkProjectConfig(cwd: string, projectTrusted: boolean): CursorLoadedSdkConfig | undefined {
 	if (!projectTrusted) return undefined;
 	const path = getCursorSdkProjectConfigPath(cwd);
 	return existsSync(path) ? readCursorSdkConfigFile(path) : undefined;
 }
 
-export function loadCursorSdkConfig(options: LoadCursorSdkConfigOptions = {}): { user: CursorSdkConfig; project?: CursorSdkConfig } {
+export function loadCursorSdkConfig(options: LoadCursorSdkConfigOptions = {}): { user: CursorLoadedSdkConfig; project?: CursorLoadedSdkConfig } {
 	const user = loadCursorSdkUserConfig(getCursorSdkUserConfigPath(options.agentDir));
 	const project = options.cwd ? loadCursorSdkProjectConfig(options.cwd, options.projectTrusted === true) : undefined;
 	return project ? { user, project } : { user };
@@ -418,17 +433,22 @@ export function updateCursorSdkConfig(
 	});
 }
 
-export function saveCursorSdkUserConfig(config: CursorSdkConfig, path = getCursorSdkUserConfigPath()): void {
+export function saveCursorSdkUserConfig(config: CursorSdkConfig | CursorLoadedSdkConfig, path = getCursorSdkUserConfigPath()): void {
 	updateCursorSdkConfig(path, () => ({ ...config }), { newFileMode: 0o600 });
 }
 
-export function saveCursorSdkProjectConfig(cwd: string, config: CursorSdkConfig, configDirName = CONFIG_DIR_NAME): void {
+export function saveCursorSdkProjectConfig(cwd: string, config: CursorSdkConfig | CursorLoadedSdkConfig, configDirName = CONFIG_DIR_NAME): void {
 	const path = getCursorSdkProjectConfigPath(cwd, configDirName);
 	updateCursorSdkConfig(path, () => ({ ...config }));
 }
 
-export function mergeCursorSdkConfig(base: CursorSdkConfig, patch: CursorSdkConfig): CursorSdkConfig {
-	return mergeCursorSdkConfigForUpdate({ ...base }, patch) as CursorSdkConfig;
+export function mergeCursorSdkConfig(base: CursorSdkConfig, patch: CursorSdkConfig): CursorSdkConfig;
+export function mergeCursorSdkConfig(base: CursorLoadedSdkConfig, patch: CursorSdkConfig): CursorLoadedSdkConfig;
+export function mergeCursorSdkConfig(
+	base: CursorSdkConfig | CursorLoadedSdkConfig,
+	patch: CursorSdkConfig,
+): CursorSdkConfig | CursorLoadedSdkConfig {
+	return mergeCursorSdkConfigForUpdate({ ...base }, patch) as CursorLoadedSdkConfig;
 }
 
 export function mergeCursorSdkConfigForUpdate(
@@ -458,7 +478,7 @@ export function mergeCursorSdkConfigForUpdate(
 	};
 }
 
-export function cursorFastDefaultsFromConfig(config: CursorSdkConfig | undefined): Map<string, boolean> {
+export function cursorFastDefaultsFromConfig(config: Pick<CursorSdkConfig, "fastDefaults"> | undefined): Map<string, boolean> {
 	return new Map(Object.entries(config?.fastDefaults ?? {}));
 }
 
@@ -600,13 +620,20 @@ export function cursorSdkConfigFromEnv(env: Record<string, string | undefined> =
 			...(acknowledged !== undefined ? { acknowledged } : {}),
 		};
 	}
+	const toolMode = validateExplicitValue(
+		env[CURSOR_TOOL_MODE_ENV],
+		CURSOR_TOOL_MODE_ENV,
+		isCursorLocalToolMode,
+		'"cursor", "pi-only", or "none"',
+	);
 	const autoReview = parseOptionalEnvBoolean(env[CURSOR_AUTO_REVIEW_ENV]);
 	const sandbox = parseOptionalEnvBoolean(env[CURSOR_SANDBOX_ENV]);
 	const force = parseOptionalEnvBoolean(env[CURSOR_LOCAL_FORCE_ENV]);
 	const resume = parseOptionalEnvBoolean(env[CURSOR_LOCAL_RESUME_ENV]);
 	const useHttp1ForAgent = parseOptionalEnvBoolean(env[CURSOR_HTTP1_ENV]);
-	if (autoReview !== undefined || sandbox !== undefined || force !== undefined || resume !== undefined || useHttp1ForAgent !== undefined) {
+	if (toolMode !== undefined || autoReview !== undefined || sandbox !== undefined || force !== undefined || resume !== undefined || useHttp1ForAgent !== undefined) {
 		config.local = {
+			...(toolMode !== undefined ? { toolMode } : {}),
 			...(autoReview !== undefined ? { autoReview } : {}),
 			...(sandbox !== undefined ? { sandboxOptions: { enabled: sandbox } } : {}),
 			...(force !== undefined ? { force } : {}),
@@ -625,7 +652,14 @@ export function resolveCursorSdkConfig(options: ResolveCursorSdkConfigOptions = 
 		isCursorCloudContextHandoff,
 		'"never", "fresh", or "bootstrap"',
 	);
+	const cliToolMode = validateExplicitValue(
+		options.cli?.local?.toolMode,
+		"--cursor-tool-mode",
+		isCursorLocalToolMode,
+		'"cursor", "pi-only", or "none"',
+	);
 	const env = cursorSdkConfigFromEnv(options.env);
+	const envToolMode = isCursorLocalToolMode(env.local?.toolMode) ? env.local.toolMode : undefined;
 	const builtIn = {
 		...BUILT_IN_CURSOR_CONFIG,
 		...options.builtIn,
@@ -635,6 +669,18 @@ export function resolveCursorSdkConfig(options: ResolveCursorSdkConfigOptions = 
 	const session = options.session;
 	const project = options.project;
 	const user = options.user;
+	const projectToolMode = validateExplicitValue(
+		project?.local?.toolMode,
+		"trusted project config local.toolMode",
+		isCursorLocalToolMode,
+		'"cursor", "pi-only", or "none"',
+	);
+	const userToolMode = validateExplicitValue(
+		user?.local?.toolMode,
+		"user config local.toolMode",
+		isCursorLocalToolMode,
+		'"cursor", "pi-only", or "none"',
+	);
 	return {
 		runtime: resolveSafetyField(
 			RUNTIME_ORDER,
@@ -752,6 +798,13 @@ export function resolveCursorSdkConfig(options: ResolveCursorSdkConfigOptions = 
 			}),
 		},
 		local: {
+			toolMode: resolveOrdinaryField(LOCAL_ORDER, {
+				cli: cliToolMode,
+				environment: envToolMode,
+				project: projectToolMode,
+				user: userToolMode,
+				builtin: "cursor",
+			}),
 			autoReview: resolveOrdinaryField(LOCAL_ORDER, {
 				cli: cli?.local?.autoReview,
 				environment: env.local?.autoReview,

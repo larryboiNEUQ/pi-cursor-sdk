@@ -39,10 +39,11 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 		return resolveCursorPiToolBridgeEnabled(this.env);
 	}
 
-	getToolSurfaceSignature(): string {
+	getToolSurfaceSignature(options: { exposeOverlappingBuiltins?: boolean } = {}): string {
 		if (!this.isEnabled()) return "bridge:off";
 		const snapshot = buildCursorPiToolBridgeSnapshot(this.pi, {
-			exposeOverlappingBuiltins: resolveCursorPiToolBridgeBuiltinsEnabled(this.env),
+			exposeOverlappingBuiltins: options.exposeOverlappingBuiltins
+				?? resolveCursorPiToolBridgeBuiltinsEnabled(this.env),
 		});
 		return buildCursorPiToolBridgeSurfaceSignature(snapshot);
 	}
@@ -51,7 +52,8 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 		const bridgeEnabled = this.isEnabled();
 		const snapshot = bridgeEnabled
 			? buildCursorPiToolBridgeSnapshot(this.pi, {
-				exposeOverlappingBuiltins: resolveCursorPiToolBridgeBuiltinsEnabled(this.env),
+				exposeOverlappingBuiltins: options.exposeOverlappingBuiltins
+					?? resolveCursorPiToolBridgeBuiltinsEnabled(this.env),
 			})
 			: createEmptySnapshot();
 		const { CursorPiToolBridgeRunImpl } = await import("./cursor-pi-tool-bridge-run.js");

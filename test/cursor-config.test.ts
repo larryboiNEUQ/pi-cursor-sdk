@@ -21,6 +21,7 @@ import {
 	CURSOR_SANDBOX_ENV,
 	CURSOR_LOCAL_FORCE_ENV,
 	CURSOR_LOCAL_RESUME_ENV,
+	CURSOR_TOOL_MODE_ENV,
 	CURSOR_HTTP1_ENV,
 	cursorFastDefaultsFromConfig,
 	getCursorSdkProjectConfigPath,
@@ -569,6 +570,55 @@ describe("Cursor SDK config resolver", () => {
 			session: { cloud: { repo: "session-repo" } },
 		}).cloud;
 		expect(cloud.repo).toMatchObject({ value: "session-repo", source: "session" });
+	});
+
+	it("resolves local tool mode by CLI, env, trusted project, user, built-in order", () => {
+		const user = { local: { toolMode: "pi-only" as const } };
+		const project = { local: { toolMode: "none" as const } };
+
+		expect(resolveCursorSdkConfig().local.toolMode).toMatchObject({ value: "cursor", source: "builtin" });
+		expect(resolveCursorSdkConfig({ user }).local.toolMode).toMatchObject({ value: "pi-only", source: "user" });
+		expect(resolveCursorSdkConfig({ user, project }).local.toolMode).toMatchObject({ value: "none", source: "project" });
+		expect(resolveCursorSdkConfig({ env: { [CURSOR_TOOL_MODE_ENV]: "pi-only" }, user, project }).local.toolMode).toMatchObject({
+			value: "pi-only",
+			source: "environment",
+		});
+		expect(resolveCursorSdkConfig({
+			cli: { local: { toolMode: "cursor" } },
+			env: { [CURSOR_TOOL_MODE_ENV]: "none" },
+			user,
+			project,
+		}).local.toolMode).toMatchObject({ value: "cursor", source: "cli" });
+	});
+
+	it("fails closed for invalid explicit local tool modes", () => {
+		expect(() => resolveCursorSdkConfig({
+			cli: { local: { toolMode: "native" } },
+		})).toThrow('Invalid --cursor-tool-mode "native". Use "cursor", "pi-only", or "none".');
+		expect(() => resolveCursorSdkConfig({
+			env: { [CURSOR_TOOL_MODE_ENV]: "native" },
+		})).toThrow('Invalid PI_CURSOR_TOOL_MODE "native". Use "cursor", "pi-only", or "none".');
+	});
+
+	it("fails closed for invalid persisted local tool modes", () => {
+		expect(() => resolveCursorSdkConfig({
+			user: { local: { toolMode: "native" } },
+		})).toThrow('Invalid user config local.toolMode "native". Use "cursor", "pi-only", or "none".');
+		expect(() => resolveCursorSdkConfig({
+			project: { local: { toolMode: "native" } },
+		})).toThrow('Invalid trusted project config local.toolMode "native". Use "cursor", "pi-only", or "none".');
+	});
+
+	it("loads local tool mode only from trusted project config", () => {
+		const projectPath = getCursorSdkProjectConfigPath(cwd);
+		mkdirSync(join(cwd, ".pi"), { recursive: true });
+		writeFileSync(projectPath, JSON.stringify({ local: { toolMode: "pi-only" } }));
+
+		expect(loadCursorSdkConfig({ cwd, agentDir, projectTrusted: false })).toEqual({ user: {} });
+		expect(loadCursorSdkConfig({ cwd, agentDir, projectTrusted: true })).toEqual({
+			user: {},
+			project: { local: { toolMode: "pi-only" } },
+		});
 	});
 
 	it("resolves local safety controls by CLI, env, project, user, built-in order", () => {

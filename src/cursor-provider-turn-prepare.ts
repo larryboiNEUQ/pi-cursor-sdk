@@ -272,6 +272,7 @@ async function prepareCursorLocalProviderTurn(
 			cwd,
 			modelSelection: selection,
 			settingSources,
+			toolMode: resolvedConfig.local.toolMode.value,
 			localSafety,
 			localResume: resolvedConfig.local.resume.value,
 			useHttp1ForAgent,
@@ -307,6 +308,7 @@ async function prepareCursorLocalProviderTurn(
 				toolManifest: buildCursorToolManifestText({
 					bridgeSnapshot: sessionAgentLease.bridgeRun?.snapshot,
 					piBridgeEnabled: resolveCursorPiToolBridgeEnabled(),
+					toolMode: resolvedConfig.local.toolMode.value,
 					includePiBridgeGuidance,
 				}),
 			};
@@ -348,6 +350,7 @@ async function prepareCursorLocalProviderTurn(
 				selection,
 			},
 			settingSources: settingSources ?? null,
+			toolMode: resolvedConfig.local.toolMode.value,
 			sendState: sessionAgentLease.sendState,
 			sendPlan,
 			promptOptions,

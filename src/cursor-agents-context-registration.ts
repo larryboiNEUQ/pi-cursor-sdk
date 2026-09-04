@@ -9,12 +9,14 @@ export function registerCursorAgentsContextDedup(pi: CursorAgentsContextExtensio
 	registerCursorModelLifecycle(pi, {
 		beforeAgentStart: (event, ctx) => {
 			if (!isCursorModel(ctx.model)) return undefined;
-			const runtime = resolveEffectiveCursorConfigForContext(ctx).runtime.value;
+			const config = resolveEffectiveCursorConfigForContext(ctx);
+			const runtime = config.runtime.value;
+			const settingSources = config.local.toolMode.value === "cursor" ? undefined : "none";
 			const resolved = resolveCursorFacingSystemPrompt(
 				event.systemPrompt,
 				ctx.model,
 				event.systemPromptOptions,
-				undefined,
+				settingSources,
 				undefined,
 				runtime,
 			);

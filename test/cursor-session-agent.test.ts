@@ -1,7 +1,8 @@
 import { toNamespacedPath } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { computeCursorContextFingerprint, shouldBootstrapCursorContext } from "../src/context.js";
-import { createEventHarness, createExtensionTestContext, makeContext } from "./helpers/pi-harness.js";
+import { createBridgePiHarness, createBuiltinToolInfo, createEventHarness, createExtensionTestContext, makeContext } from "./helpers/pi-harness.js";
+import { __testUtils as bridgeTestUtils, registerCursorPiToolBridge } from "../src/cursor-pi-tool-bridge.js";
 import { __testUtils as cursorSessionScopeTestUtils, registerCursorSessionScope } from "../src/cursor-session-scope.js";
 import { __testUtils as resumeTestUtils } from "../src/cursor-session-agent-resume.js";
 import {
@@ -18,6 +19,7 @@ describe("cursor-session-agent", () => {
 		cursorSessionScopeTestUtils.reset();
 		resumeTestUtils.reset();
 		await sessionAgentTestUtils.disposeAllSessionCursorAgents();
+		await bridgeTestUtils.resetRegisteredBridgeForTests();
 		vi.clearAllMocks();
 	});
 
@@ -116,6 +118,138 @@ describe("cursor-session-agent", () => {
 		expect(second.agent).toBe(first.agent);
 		expect(createAgent).toHaveBeenCalledTimes(1);
 		expect(mockDispose).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["cursor", undefined, ["all"]],
+		["pi-only", [], []],
+		["none", [], []],
+	] as const)("maps %s tool mode into restrictive SDK create options", async (toolMode, expectedTools, expectedSettingSources) => {
+		const createAgent = vi.fn().mockResolvedValue({
+			agentId: `agent-${toolMode}`,
+			[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+		});
+		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/tool-mode.jsonl");
+
+		await acquireSessionCursorAgent({
+			apiKey: "test-key",
+			agentMode: "agent",
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			settingSources: ["all"],
+			toolMode,
+			createAgent,
+		});
+
+		const options = createAgent.mock.calls[0][0];
+		if (expectedTools === undefined) expect(options).not.toHaveProperty("tools");
+		else expect(options.tools).toEqual(expectedTools);
+		expect(options.local?.settingSources).toEqual(expectedSettingSources);
+		expect(options).not.toHaveProperty("mcpServers");
+	});
+
+	it("exposes overlapping active Pi built-ins through MCP in Pi-only mode", async () => {
+		const pi = createBridgePiHarness({ active: ["read"], tools: [createBuiltinToolInfo("read")] });
+		registerCursorPiToolBridge(pi);
+		const createAgent = vi.fn().mockResolvedValue({
+			agentId: "agent-pi-only",
+			[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+		});
+		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/pi-only-builtins.jsonl");
+
+		const lease = await acquireSessionCursorAgent({
+			apiKey: "test-key",
+			agentMode: "agent",
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			settingSources: ["all"],
+			toolMode: "pi-only",
+			createAgent,
+		});
+
+		expect(createAgent.mock.calls[0][0]).toMatchObject({
+			tools: ["mcp"],
+			local: { settingSources: [] },
+			mcpServers: { pi_tools: expect.any(Object) },
+		});
+		expect(lease.bridgeRun?.snapshot.tools.map((tool) => tool.piToolName)).toEqual(["read"]);
+	});
+
+	it("does not create a Pi bridge in none mode even when active Pi tools exist", async () => {
+		const pi = createBridgePiHarness({ active: ["read"], tools: [createBuiltinToolInfo("read")] });
+		registerCursorPiToolBridge(pi);
+		const createAgent = vi.fn().mockResolvedValue({
+			agentId: "agent-none",
+			[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+		});
+		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/none-no-bridge.jsonl");
+
+		const lease = await acquireSessionCursorAgent({
+			apiKey: "test-key",
+			agentMode: "agent",
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			toolMode: "none",
+			createAgent,
+		});
+
+		expect(lease.bridgeRun).toBeUndefined();
+		expect(createAgent.mock.calls[0][0]).toMatchObject({ tools: [], local: { settingSources: [] } });
+		expect(createAgent.mock.calls[0][0]).not.toHaveProperty("mcpServers");
+	});
+
+	it("uses no-tools instead of a Cursor fallback when Pi-only bridge exposure is disabled", async () => {
+		const previous = process.env.PI_CURSOR_PI_TOOL_BRIDGE;
+		process.env.PI_CURSOR_PI_TOOL_BRIDGE = "0";
+		try {
+			const pi = createBridgePiHarness({ active: ["read"], tools: [createBuiltinToolInfo("read")] });
+			registerCursorPiToolBridge(pi);
+			const createAgent = vi.fn().mockResolvedValue({
+				agentId: "agent-pi-only-no-bridge",
+				[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+			});
+			cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/pi-only-no-bridge.jsonl");
+
+			const lease = await acquireSessionCursorAgent({
+				apiKey: "test-key",
+				agentMode: "agent",
+				cwd: "/tmp/project",
+				modelSelection: { id: "composer-2.5" },
+				toolMode: "pi-only",
+				createAgent,
+			});
+
+			expect(lease.bridgeRun).toBeUndefined();
+			expect(createAgent.mock.calls[0][0]).toMatchObject({ tools: [], local: { settingSources: [] } });
+			expect(createAgent.mock.calls[0][0]).not.toHaveProperty("mcpServers");
+		} finally {
+			if (previous === undefined) delete process.env.PI_CURSOR_PI_TOOL_BRIDGE;
+			else process.env.PI_CURSOR_PI_TOOL_BRIDGE = previous;
+		}
+	});
+
+	it("replaces a pooled agent when the effective tool mode changes", async () => {
+		const dispose = vi.fn().mockResolvedValue(undefined);
+		const createAgent = vi.fn().mockImplementation(async () => ({
+			agentId: `agent-${createAgent.mock.calls.length}`,
+			[Symbol.asyncDispose]: dispose,
+		}));
+		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/tool-mode-pool.jsonl");
+		const params = {
+			apiKey: "test-key",
+			agentMode: "agent" as const,
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			toolMode: "cursor" as const,
+			createAgent,
+		};
+
+		const first = await acquireSessionCursorAgent(params);
+		const second = await acquireSessionCursorAgent({ ...params, toolMode: "none" });
+
+		expect(second.agent).not.toBe(first.agent);
+		expect(createAgent).toHaveBeenCalledTimes(2);
+		expect(dispose).toHaveBeenCalledTimes(1);
 	});
 
 	it("awaits lease-tracked background sdk run completion for the same pool instance", async () => {

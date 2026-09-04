@@ -322,6 +322,53 @@ describe("cursor pi tool bridge loopback MCP lifecycle", () => {
 		expect(emptyRegistry.getEndpointCount()).toBe(0);
 	});
 
+	it("can force overlapping Pi built-ins into a restrictive run without the ambient env opt-in", async () => {
+		const registry = __testUtils.createRegistry(
+			createBridgePiHarness({ active: ["read"], tools: [createToolInfo("read")] }),
+			{},
+		);
+		const run = await registry.createRun({ exposeOverlappingBuiltins: true });
+		try {
+			expect(run.enabled).toBe(true);
+			expect(run.snapshot.tools.map((tool) => tool.piToolName)).toEqual(["read"]);
+			expect(run.mcpServers).toHaveProperty("pi_tools");
+		} finally {
+			await run.dispose();
+		}
+	});
+
+	it("routes Pi-only bridge calls through normal Pi permission hooks", async () => {
+		const pi = createBridgePiHarness({ active: ["safe_read"], tools: [createToolInfo("safe_read")] });
+		const bridge = registerCursorPiToolBridge(pi);
+		const permissionHook = vi.fn(() => ({ block: true as const, reason: "operator denied" }));
+		pi.on("tool_call", permissionHook);
+		const run = await bridge.createRun();
+		const { client, transport } = await connectClient(getCursorPiBridgeMcpUrl(run));
+		try {
+			const callPromise = client.callTool({ name: "pi__safe_read", arguments: {} });
+			const observedCallError = callPromise.catch((error: unknown) => error);
+			const [request] = await waitForQueuedRequests(run);
+			const decision = await pi.runToolCall({
+				type: "tool_call",
+				toolCallId: request.piToolCallId,
+				toolName: request.piToolName,
+				input: request.args,
+			});
+
+			expect(permissionHook).toHaveBeenCalledWith(
+				expect.objectContaining({ toolCallId: request.piToolCallId, toolName: "safe_read" }),
+				expect.any(Object),
+			);
+			expect(decision).toEqual({ block: true, reason: "operator denied" });
+			run.cancel("permission denied");
+			expect(await observedCallError).toBeInstanceOf(Error);
+		} finally {
+			await client.close().catch(() => undefined);
+			await transport.close().catch(() => undefined);
+			await run.dispose();
+		}
+	});
+
 	it("does not emit bridge diagnostics unless explicitly enabled", async () => {
 		const diagnostics = collectBridgeDiagnosticOutput();
 		try {

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { CURSOR_HTTP1_ENV } from "../src/cursor-config.js";
+import { CURSOR_HTTP1_ENV, CURSOR_TOOL_MODE_ENV } from "../src/cursor-config.js";
 import {
 	__testUtils,
 	getCursorCliConfig,
@@ -37,6 +37,7 @@ const RUNTIME_ENV_NAMES = [
 	"PI_CURSOR_CLOUD_SKIP_REVIEWER_REQUEST",
 	"PI_CURSOR_CLOUD_ACK",
 	CURSOR_HTTP1_ENV,
+	CURSOR_TOOL_MODE_ENV,
 ] as const;
 
 function createCursorRuntimeHarness(options: {
@@ -142,6 +143,16 @@ describe("Cursor cloud runtime state", () => {
 		harness = createCursorRuntimeHarness();
 		await harness.pi.invokeEventWithContext("session_start", { type: "session_start", reason: "startup" }, harness.ctx);
 		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("cursor", "cursor:cloud · fast:n/a");
+	});
+
+	it("shows restrictive local tool mode in runtime status", async () => {
+		process.env[CURSOR_TOOL_MODE_ENV] = "pi-only";
+		const harness = createCursorRuntimeHarness();
+		await harness.pi.invokeEventWithContext("session_start", { type: "session_start", reason: "startup" }, harness.ctx);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+			"cursor",
+			"cursor:local · fast:off · tools:pi-only",
+		);
 	});
 
 	it("shows invalid status and refuses writes for invalid explicit overrides", async () => {

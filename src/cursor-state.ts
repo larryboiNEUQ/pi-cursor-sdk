@@ -31,6 +31,7 @@ import { getCursorSessionScopeKey } from "./cursor-session-scope.js";
 import { refreshSessionCursorAgentConfig } from "./cursor-session-agent.js";
 import { getCursorModelMetadata } from "./model-discovery.js";
 import {
+	type CursorLocalToolMode,
 	cursorFastDefaultsFromConfig,
 	getCursorSdkUserConfigPath,
 	loadCursorSdkUserConfig,
@@ -270,7 +271,7 @@ function updateCursorStatus(ctx: CursorStatusContext & Pick<ExtensionContext, "m
 	const fast = runtime === "cloud" ? undefined : metadata?.supportsFast ? getEffectiveFast(model.id) : undefined;
 	ctx.ui.setStatus(
 		"cursor",
-		formatCursorStatus(runtime, fast, mode, resolution.useHttp1ForAgent.value),
+		formatCursorStatus(runtime, fast, mode, resolution.useHttp1ForAgent.value, resolution.toolMode.value),
 	);
 }
 
@@ -379,34 +380,49 @@ function formatEffectiveCursorSettingSourcesLabel(raw: string | undefined = proc
 export function formatCursorToolsDebugReport(
 	pi: Pick<ExtensionAPI, "getActiveTools" | "getAllTools">,
 	env: Record<string, string | undefined> = process.env,
+	toolMode: CursorLocalToolMode = "cursor",
 ): string {
-	const bridgeEnabled = resolveCursorPiToolBridgeEnabled(env);
+	const bridgeConfigured = resolveCursorPiToolBridgeEnabled(env);
+	const bridgeAvailable = toolMode !== "none" && bridgeConfigured;
 	const manifestEnabled = resolveCursorToolManifestEnabled(env);
 	const lines = [
 		"Cursor tool surfaces (current session):",
-		`${CURSOR_PI_TOOL_BRIDGE_ENV}: ${bridgeEnabled ? "enabled" : "disabled"}`,
+		`Effective tool mode: ${toolMode}`,
+		`Cursor-owned host tools: ${toolMode === "cursor" ? "available" : "disabled"}`,
+		`Ambient Cursor settings/plugins/MCP: ${toolMode === "cursor" ? "available per setting sources" : "disabled"}`,
+		`${CURSOR_PI_TOOL_BRIDGE_ENV}: ${bridgeConfigured ? "enabled" : "disabled"}`,
+		`Effective Pi bridge: ${bridgeAvailable ? "available when tools are exposed" : "unavailable"}`,
 		`${CURSOR_TOOL_MANIFEST_ENV}: ${manifestEnabled ? "enabled" : "disabled"}`,
 		`${CURSOR_SETTING_SOURCES_ENV}: ${formatEffectiveCursorSettingSourcesLabel(env[CURSOR_SETTING_SOURCES_ENV])}`,
 	];
 
 	let bridgeSnapshot;
-	if (bridgeEnabled) {
+	if (bridgeAvailable) {
 		try {
-			bridgeSnapshot = buildCursorPiToolBridgeSnapshot(pi);
+			bridgeSnapshot = buildCursorPiToolBridgeSnapshot(pi, {
+				exposeOverlappingBuiltins: toolMode === "pi-only" ? true : undefined,
+			});
 		} catch {
 			lines.push("Pi bridge snapshot: unavailable (extension tool APIs required).");
 		}
 	}
 
-	lines.push(buildCursorToolManifestText({ bridgeSnapshot, piBridgeEnabled: bridgeEnabled }));
+	lines.push(buildCursorToolManifestText({
+		bridgeSnapshot,
+		piBridgeEnabled: bridgeAvailable,
+		toolMode,
+	}));
 	return lines.join("\n");
 }
 
 function emitCursorToolsDebugReport(
 	pi: Pick<ExtensionAPI, "getActiveTools" | "getAllTools">,
-	ctx: Pick<ExtensionContext, "hasUI" | "ui">,
+	ctx: Pick<ExtensionContext, "cwd" | "hasUI" | "ui">,
 ): void {
-	const report = formatCursorToolsDebugReport(pi);
+	const resolution = resolveCursorStatusRuntime(ctx);
+	const report = resolution.kind === "valid"
+		? formatCursorToolsDebugReport(pi, process.env, resolution.toolMode.value)
+		: `Cursor tool surfaces (current session):\nConfiguration invalid: ${resolution.message}`;
 	if (ctx.hasUI) {
 		ctx.ui.notify(report, "info");
 		return;

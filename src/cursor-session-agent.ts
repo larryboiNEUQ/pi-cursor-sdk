@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { AgentModeOption, LocalAgentOptions, LocalAgentStore, ModelSelection, SDKAgent, SettingSource } from "@cursor/sdk";
 import type { Context } from "@earendil-works/pi-ai";
+import type { CursorLocalToolMode } from "./cursor-config.js";
+import { buildCursorLocalToolPolicy } from "./cursor-local-tool-mode.js";
 import {
 	getRegisteredCursorPiToolBridge,
 	type CursorPiBridgeToolRequest,
@@ -126,6 +128,7 @@ interface SessionCursorAgentCreateParams {
 	cwd: string;
 	modelSelection: ModelSelection;
 	settingSources?: SettingSource[];
+	toolMode?: CursorLocalToolMode;
 	localSafety?: CursorLocalSafetyOptions;
 	useHttp1ForAgent?: boolean;
 	onBridgeToolRequest?: (request: CursorPiBridgeToolRequest) => void;
@@ -205,18 +208,24 @@ function buildApiKeyPoolKeyFingerprint(apiKey: string): string {
 	return createHash("sha256").update(apiKey).digest("hex").slice(0, 16);
 }
 
-function buildBridgePoolKeySuffix(): string {
+function buildBridgePoolKeySuffix(toolMode: CursorLocalToolMode): string {
+	if (toolMode === "none") return "bridge:none";
 	const registeredBridge = getRegisteredCursorPiToolBridge();
 	if (!registeredBridge) return "bridge:absent";
-	return registeredBridge.getToolSurfaceSignature();
+	return registeredBridge.getToolSurfaceSignature({
+		exposeOverlappingBuiltins: toolMode === "pi-only" ? true : undefined,
+	});
 }
 
 function buildSessionAgentPoolKey(scopeKey: string, params: SessionCursorAgentCreateParams): string {
+	const toolMode = params.toolMode ?? "cursor";
+	const toolPolicy = buildCursorLocalToolPolicy(toolMode, params.settingSources);
 	return [
 		scopeKey,
 		params.cwd,
 		buildModelPoolKey(params.modelSelection),
-		buildSettingSourcesPoolKey(params.settingSources),
+		`tools:${toolMode}`,
+		buildSettingSourcesPoolKey(toolPolicy.settingSources),
 		buildLocalSafetyPoolKey(params.localSafety),
 		params.useHttp1ForAgent === undefined
 			? "http1:default"
@@ -224,7 +233,7 @@ function buildSessionAgentPoolKey(scopeKey: string, params: SessionCursorAgentCr
 				? "http1:on"
 				: "http1:off",
 		buildApiKeyPoolKeyFingerprint(params.apiKey),
-		buildBridgePoolKeySuffix(),
+		buildBridgePoolKeySuffix(toolMode),
 	].join("\0");
 }
 
@@ -445,9 +454,12 @@ async function createSessionAgentEntry(
 	let bridgeRun: CursorPiToolBridgeRun | undefined;
 	let sessionStore: OpenCursorSessionStore | undefined;
 	try {
+		const toolMode = params.toolMode ?? "cursor";
+		const initialToolPolicy = buildCursorLocalToolPolicy(toolMode, params.settingSources);
 		const registeredBridge = getRegisteredCursorPiToolBridge();
-		if (registeredBridge) {
+		if (registeredBridge && initialToolPolicy.createPiBridge) {
 			bridgeRun = await registeredBridge.createRun({
+				exposeOverlappingBuiltins: initialToolPolicy.exposeOverlappingPiBuiltins,
 				onToolRequest: params.onBridgeToolRequest,
 				debugRecorder: params.debugRecorder,
 			});
@@ -456,6 +468,7 @@ async function createSessionAgentEntry(
 				bridgeRun = undefined;
 			}
 		}
+		const toolPolicy = buildCursorLocalToolPolicy(toolMode, params.settingSources, bridgeRun !== undefined);
 
 		const resolvedPoolKey = buildSessionAgentPoolKey(scopeKey, params);
 		const resumeEligible = params.localResume === true && !params.forceCreate;
@@ -482,9 +495,10 @@ async function createSessionAgentEntry(
 			apiKey: params.apiKey,
 			model: params.modelSelection,
 			mode: params.agentMode,
+			...(toolPolicy.tools === undefined ? {} : { tools: toolPolicy.tools }),
 			local: buildCursorLocalAgentOptions({
 				cwd: params.cwd,
-				settingSources: params.settingSources,
+				settingSources: toolPolicy.settingSources,
 				localSafety: params.localSafety,
 				store: sessionStore!.store,
 			}),

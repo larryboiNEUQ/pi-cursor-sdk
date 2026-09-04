@@ -747,6 +747,31 @@ describe("Cursor runtime state", () => {
 		expect(report).toContain("Callable tool surfaces this run:");
 	});
 
+	it("formatCursorToolsDebugReport distinguishes Pi-only surfaces", () => {
+		const pi = createPiHarness({
+			activeTools: ["read", "custom_bridge_tool"],
+			initialTools: [createTestToolInfo("read"), createTestToolInfo("custom_bridge_tool")],
+		});
+		const report = formatCursorToolsDebugReport(pi, {
+			PI_CURSOR_PI_TOOL_BRIDGE: "1",
+			PI_CURSOR_SETTING_SOURCES: "all",
+		}, "pi-only");
+		expect(report).toContain("Effective tool mode: pi-only");
+		expect(report).toContain("Cursor-owned host tools: disabled");
+		expect(report).toContain("Ambient Cursor settings/plugins/MCP: disabled");
+		expect(report).toContain("Pi bridge: pi__custom_bridge_tool, pi__read");
+	});
+
+	it("formatCursorToolsDebugReport does not advertise a bridge in none mode", () => {
+		const report = formatCursorToolsDebugReport(createPiHarness(), {
+			PI_CURSOR_PI_TOOL_BRIDGE: "1",
+		}, "none");
+		expect(report).toContain("Effective tool mode: none");
+		expect(report).toContain("Effective Pi bridge: unavailable");
+		expect(report).toContain("Callable tools: none");
+		expect(report).not.toContain("\n- Pi bridge:");
+	});
+
 	it("formatCursorToolsDebugReport notes disabled manifest", () => {
 		const pi = createPiHarness();
 		const report = formatCursorToolsDebugReport(pi, {

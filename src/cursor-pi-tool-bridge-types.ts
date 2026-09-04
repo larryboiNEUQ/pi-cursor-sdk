@@ -73,12 +73,13 @@ export interface CursorPiToolBridgeRun {
 
 export interface CursorPiToolBridge {
 	isEnabled(): boolean;
-	getToolSurfaceSignature(): string;
+	getToolSurfaceSignature(options?: CursorPiToolBridgeSnapshotOptions): string;
 	createRun(options?: CursorPiToolBridgeRunOptions): Promise<CursorPiToolBridgeRun>;
 	disposeAll(reason?: string): Promise<void>;
 }
 
 export interface CursorPiToolBridgeRunOptions {
+	exposeOverlappingBuiltins?: boolean;
 	onToolRequest?: (request: CursorPiBridgeToolRequest) => void;
 	debugRecorder?: CursorSdkEventDebugRecorder;
 }

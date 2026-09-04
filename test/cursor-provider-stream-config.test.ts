@@ -62,6 +62,31 @@ describe("streamCursor prompt and model config", () => {
 		});
 	});
 
+	it("passes the one-run CLI none mode as an explicit no-tools local SDK restriction", async () => {
+		const pi = createPiHarness({ flagValues: { "cursor-tool-mode": "none" } });
+		registerCursorRuntimeControls(pi);
+		await pi.runSessionStart({ model: makeModel("gpt-5.5@1m") });
+		mockCreatedAgent({
+			send: vi.fn().mockResolvedValue({
+				id: "run-none",
+				agentId: "agent-none",
+				status: "finished",
+				wait: vi.fn().mockResolvedValue({ id: "run-none", status: "finished" }),
+				cancel: vi.fn(),
+				supports: () => true,
+				unsupportedReason: () => undefined,
+			}),
+		});
+
+		await collectEvents(streamCursor(makeModel("gpt-5.5@1m"), makeContext(), { apiKey: "test-key" }));
+
+		expect(mockedCreate.mock.calls[0][0]).toMatchObject({
+			tools: [],
+			local: { settingSources: [] },
+		});
+		expect(mockedCreate.mock.calls[0][0]).not.toHaveProperty("mcpServers");
+	});
+
 	it("sets absolute CURSOR_RIPGREP_PATH before local Agent.create", async () => {
 		delete process.env.CURSOR_RIPGREP_PATH;
 		let pathAtCreate: string | undefined;
@@ -162,6 +187,7 @@ describe("streamCursor prompt and model config", () => {
 	it.each([
 		["cursor-runtime", "remote", 'Invalid --cursor-runtime "remote". Use "local" or "cloud".'],
 		["cursor-cloud-context", "reuse", 'Invalid --cursor-cloud-context "reuse". Use "never", "fresh", or "bootstrap".'],
+		["cursor-tool-mode", "native", 'Invalid --cursor-tool-mode "native". Use "cursor", "pi-only", or "none".'],
 	])("fails before SDK agent calls for invalid --%s", async (flag, value, expectedError) => {
 		const mockSend = vi.fn();
 		mockCreatedAgent({ send: mockSend });
@@ -180,6 +206,7 @@ describe("streamCursor prompt and model config", () => {
 	it.each([
 		["PI_CURSOR_RUNTIME", "remote", 'Invalid PI_CURSOR_RUNTIME "remote". Use "local" or "cloud".'],
 		["PI_CURSOR_CLOUD_CONTEXT", "reuse", 'Invalid PI_CURSOR_CLOUD_CONTEXT "reuse". Use "never", "fresh", or "bootstrap".'],
+		["PI_CURSOR_TOOL_MODE", "native", 'Invalid PI_CURSOR_TOOL_MODE "native". Use "cursor", "pi-only", or "none".'],
 	])("fails before SDK agent calls for invalid %s", async (envName, value, expectedError) => {
 		const mockSend = vi.fn();
 		mockCreatedAgent({ send: mockSend });
@@ -210,6 +237,7 @@ describe("streamCursor prompt and model config", () => {
 		process.env.PI_CURSOR_CLOUD_ALLOW_LOCAL_STATE = "1";
 		process.env.PI_CURSOR_CLOUD_ACK = "1";
 		process.env.PI_CURSOR_LOCAL_FORCE = "1";
+		process.env.PI_CURSOR_TOOL_MODE = "none";
 		const mockSend = vi.fn().mockResolvedValue({
 			id: "run-1",
 			agentId: "bc-00000000-0000-0000-0000-000000000001",
@@ -239,6 +267,7 @@ describe("streamCursor prompt and model config", () => {
 		});
 		expect(mockedCreate.mock.calls[0][0]).not.toHaveProperty("local");
 		expect(mockedCreate.mock.calls[0][0]).not.toHaveProperty("mcpServers");
+		expect(mockedCreate.mock.calls[0][0]).not.toHaveProperty("tools");
 		expect(mockSend.mock.calls[0]?.[1]).toMatchObject({ mode: "agent" });
 		expect(mockSend.mock.calls[0]?.[1]).not.toHaveProperty("local");
 		expect(mockSend.mock.calls[0]?.[1]).not.toHaveProperty("cloud");

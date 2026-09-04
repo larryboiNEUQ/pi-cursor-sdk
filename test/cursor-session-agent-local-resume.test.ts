@@ -20,7 +20,7 @@ describe("cursor-session-agent local resume", () => {
 		vi.clearAllMocks();
 	});
 
-	it("resumes a recorded local SDK agent from its versioned session store", async () => {
+	it("resumes a recorded local SDK agent with its no-tools restriction", async () => {
 		const storeMock = installCursorSessionStoreMock();
 		const scopeKey = "/tmp/sessions/test.jsonl";
 		const stateRoot = buildCursorSessionStateRoot("/tmp/cursor-sdk-state", scopeKey, true);
@@ -38,6 +38,7 @@ describe("cursor-session-agent local resume", () => {
 			agentMode: "agent" as const,
 			cwd: "/tmp/project",
 			modelSelection: { id: "composer-2.5" },
+			toolMode: "none" as const,
 			localResume: true,
 			createAgent,
 			resumeAgent,
@@ -79,10 +80,57 @@ describe("cursor-session-agent local resume", () => {
 				apiKey: "test-key",
 				model: { id: "composer-2.5" },
 				mode: "agent",
-				local: expect.objectContaining({ cwd: "/tmp/project", store: storeMock.stores[0] }),
+				tools: [],
+				local: expect.objectContaining({ cwd: "/tmp/project", settingSources: [], store: storeMock.stores[0] }),
 			}),
 		);
 		expect(createAgent).not.toHaveBeenCalled();
+	});
+
+	it("rejects a persisted resume handle from a different local tool mode", async () => {
+		const scopeKey = "/tmp/sessions/tool-mode-change.jsonl";
+		const stateRoot = buildCursorSessionStateRoot("/tmp/cursor-sdk-state", scopeKey, true);
+		const createAgent = vi.fn().mockResolvedValue({ agentId: "agent-new", [Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined) });
+		const resumeAgent = vi.fn();
+		cursorSessionScopeTestUtils.set("/tmp/project", scopeKey);
+		const baseParams = {
+			apiKey: "test-key",
+			agentMode: "agent" as const,
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			localResume: true,
+			createAgent,
+			resumeAgent,
+		};
+		const oldPoolKey = sessionAgentTestUtils.buildSessionAgentPoolKey(scopeKey, { ...baseParams, toolMode: "cursor" });
+		resumeTestUtils.set({
+			scopeKey,
+			sessionFile: scopeKey,
+			cwd: "/tmp/project",
+			branchPathHash: resumeTestUtils.EMPTY_BRANCH_HASH,
+			compactionGeneration: 0,
+			activeHandle: {
+				version: 2,
+				runtime: "local",
+				agentId: "agent-recorded",
+				scopeKey,
+				sessionFile: scopeKey,
+				cwd: "/tmp/project",
+				poolKey: oldPoolKey,
+				branchPathHash: resumeTestUtils.EMPTY_BRANCH_HASH,
+				compactionGeneration: 0,
+				sendState: { bootstrapped: true, contextFingerprint: "old", incrementalSendCount: 1 },
+				createdAt: "2026-07-07T00:00:00.000Z",
+				storeIdentity: { version: 1, stateRoot },
+			},
+		});
+
+		const lease = await acquireSessionCursorAgent({ ...baseParams, toolMode: "none" });
+
+		expect(lease.resumed).toBe(false);
+		expect(resumeAgent).not.toHaveBeenCalled();
+		expect(createAgent).toHaveBeenCalledOnce();
+		expect(createAgent.mock.calls[0][0].tools).toEqual([]);
 	});
 
 	it("resumes a legacy default-store agent before force-creating its session-store replacement", async () => {

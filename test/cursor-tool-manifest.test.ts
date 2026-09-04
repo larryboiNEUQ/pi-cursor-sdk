@@ -71,6 +71,45 @@ describe("cursor-tool-manifest", () => {
 		expect(empty).toContain("no pi__* tools exposed");
 	});
 
+	it("reports Pi-only as MCP-only with ambient Cursor surfaces disabled", () => {
+		const text = buildCursorToolManifestText({
+			toolMode: "pi-only",
+			piBridgeEnabled: true,
+			bridgeSnapshot: {
+				tools: [{
+					piToolName: "read",
+					mcpToolName: "pi__read",
+					description: "Read",
+					inputSchema: { type: "object" },
+					sourceInfo: { source: "builtin", path: "test", scope: "temporary", origin: "top-level" },
+				}],
+				mcpToolNameToPiToolName: new Map([["pi__read", "read"]]),
+				piToolNameToMcpToolName: new Map([["read", "pi__read"]]),
+			},
+		});
+		expect(text).toContain("Cursor host tools: disabled");
+		expect(text).toContain("Cursor settings/plugins/configured MCP: disabled");
+		expect(text).toContain("Pi bridge: pi__read");
+	});
+
+	it("reports no callable fallback when Pi-only bridge exposure is empty", () => {
+		const text = buildCursorToolManifestText({
+			toolMode: "pi-only",
+			piBridgeEnabled: true,
+			includePiBridgeGuidance: false,
+		});
+		expect(text).toContain("Pi bridge: no pi__* tools exposed; no callable tools");
+	});
+
+	it("reports none without creating or advertising a Pi bridge surface", () => {
+		const text = buildCursorToolManifestText({ toolMode: "none", piBridgeEnabled: true });
+		expect(text).toContain("Callable tools: none");
+		expect(text).toContain("Cursor host tools: disabled");
+		expect(text).toContain("Cursor settings/plugins/configured MCP: disabled");
+		expect(text).not.toContain("Pi bridge");
+		expect(text).not.toContain("pi__");
+	});
+
 	it("defaults manifest env to enabled", () => {
 		expect(resolveCursorToolManifestEnabled({})).toBe(true);
 		expect(resolveCursorToolManifestEnabled({ [CURSOR_TOOL_MANIFEST_ENV]: "0" })).toBe(false);

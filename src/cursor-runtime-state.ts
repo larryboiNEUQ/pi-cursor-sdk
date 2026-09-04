@@ -21,6 +21,7 @@ import {
 	CURSOR_LOCAL_RESUME_ENV,
 	CURSOR_RUNTIME_ENV,
 	CURSOR_SANDBOX_ENV,
+	CURSOR_TOOL_MODE_ENV,
 	getCursorSdkProjectConfigPath,
 	getCursorSdkUserConfigPath,
 	loadCursorSdkConfig,
@@ -31,6 +32,7 @@ import {
 	type CursorExplicitSdkConfig,
 	type CursorResolvedSdkConfig,
 	type CursorResolvedSetting,
+	type CursorLocalToolMode,
 	type CursorRuntime,
 	type CursorSdkConfig,
 } from "./cursor-config.js";
@@ -130,6 +132,7 @@ export type CursorRuntimeResolution =
 			kind: "valid";
 			runtime: CursorResolvedSetting<CursorRuntime>;
 			useHttp1ForAgent: CursorResolvedSetting<boolean>;
+			toolMode: CursorResolvedSetting<CursorLocalToolMode>;
 		}
 	| { kind: "invalid"; message: string };
 
@@ -140,6 +143,7 @@ export function resolveCursorStatusRuntime(ctx: CursorRuntimeContext): CursorRun
 			kind: "valid",
 			runtime: config.runtime,
 			useHttp1ForAgent: config.local.useHttp1ForAgent,
+			toolMode: config.local.toolMode,
 		};
 	} catch (error) {
 		return { kind: "invalid", message: error instanceof Error ? error.message : String(error) };
@@ -158,8 +162,10 @@ export function formatCursorStatus(
 	fast: boolean | undefined,
 	mode: "agent" | "plan" | "invalid",
 	useHttp1ForAgent = false,
+	toolMode: CursorLocalToolMode = "cursor",
 ): string {
 	const parts = [`cursor:${runtime}`, fast === true ? "fast:on" : fast === false ? "fast:off" : "fast:n/a"];
+	if (runtime === "local" && toolMode !== "cursor") parts.push(`tools:${toolMode}`);
 	if (runtime === "local" && useHttp1ForAgent) parts.push("http1");
 	if (mode === "invalid") parts.push("mode invalid");
 	else if (mode === "plan") parts.push("plan");
@@ -197,6 +203,7 @@ export function restoreSessionCursorRuntimeState(branch: readonly SessionEntry[]
 
 export function restoreCursorCliState(pi: Pick<ExtensionAPI, "getFlag">): void {
 	const runtime = stringFlagValue(pi.getFlag("cursor-runtime"));
+	const toolMode = stringFlagValue(pi.getFlag("cursor-tool-mode"));
 	const repo = stringFlagValue(pi.getFlag("cursor-cloud-repo"));
 	const branch = stringFlagValue(pi.getFlag("cursor-cloud-branch"));
 	const contextHandoff = stringFlagValue(pi.getFlag("cursor-cloud-context"));
@@ -218,6 +225,7 @@ export function restoreCursorCliState(pi: Pick<ExtensionAPI, "getFlag">): void {
 		...(pi.getFlag("cursor-cloud-ack") === true ? { acknowledged: true } : {}),
 	};
 	const local: NonNullable<CursorExplicitSdkConfig["local"]> = {
+		...(toolMode ? { toolMode } : {}),
 		...(pi.getFlag("cursor-auto-review") === true ? { autoReview: true } : {}),
 		...(pi.getFlag("cursor-sandbox") === true ? { sandboxOptions: { enabled: true } } : {}),
 		...(!cliLocalForceConsumed && pi.getFlag("cursor-local-force") === true ? { force: true } : {}),
@@ -254,6 +262,11 @@ function persistCursorRuntimePreference(
 function registerCursorRuntimeFlags(pi: Pick<ExtensionAPI, "registerFlag">): void {
 	pi.registerFlag("cursor-runtime", {
 		description: `Select Cursor runtime for this run: local or cloud (or set ${CURSOR_RUNTIME_ENV})`,
+		type: "string",
+		default: "",
+	});
+	pi.registerFlag("cursor-tool-mode", {
+		description: `Restrict local Cursor tools for this run: cursor, pi-only, or none (or set ${CURSOR_TOOL_MODE_ENV})`,
 		type: "string",
 		default: "",
 	});

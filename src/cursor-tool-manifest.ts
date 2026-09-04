@@ -1,5 +1,6 @@
 import { parseEnvBoolean } from "./cursor-env-boolean.js";
 import type { CursorPiToolBridgeSnapshot } from "./cursor-pi-tool-bridge-types.js";
+import type { CursorLocalToolMode } from "./cursor-config.js";
 
 export const CURSOR_TOOL_MANIFEST_ENV = "PI_CURSOR_TOOL_MANIFEST";
 
@@ -21,15 +22,43 @@ export function buildCursorToolManifestText(options: {
 	/** When false, bridge is off via PI_CURSOR_PI_TOOL_BRIDGE=0 (not merely empty). */
 	piBridgeEnabled?: boolean;
 	includePiBridgeGuidance?: boolean;
+	toolMode?: CursorLocalToolMode;
 } = {}): string {
+	const toolMode = options.toolMode ?? "cursor";
 	const piBridgeEnabled = options.piBridgeEnabled ?? true;
 	const includePiBridgeGuidance = options.includePiBridgeGuidance !== false;
+	const bridgeTools = toolMode === "pi-only" || includePiBridgeGuidance ? options.bridgeSnapshot?.tools ?? [] : [];
+	if (toolMode === "none") {
+		return [
+			"Callable tool surfaces this run:",
+			"- Callable tools: none.",
+			"- Cursor host tools: disabled.",
+			"- Cursor settings/plugins/configured MCP: disabled.",
+			"- Not callable: cursor-replay-* IDs and transcript labels.",
+		].join("\n");
+	}
+	if (toolMode === "pi-only") {
+		const lines = [
+			"Callable tool surfaces this run:",
+			"- Cursor host tools: disabled.",
+			"- Cursor settings/plugins/configured MCP: disabled.",
+		];
+		if (!piBridgeEnabled) {
+			lines.push("- Pi bridge: disabled; no callable tools.");
+		} else if (bridgeTools.length === 0) {
+			lines.push("- Pi bridge: no pi__* tools exposed; no callable tools.");
+		} else {
+			const names = [...bridgeTools.map((tool) => tool.mcpToolName)].sort().join(", ");
+			lines.push(`- Pi bridge: ${names}; these are the only callable tools and pi shows their real names.`);
+		}
+		lines.push("- Not callable: cursor-replay-* IDs, pi history names, transcript labels.");
+		return lines.join("\n");
+	}
 	const lines = [
 		"Callable tool surfaces this run:",
 		`- Cursor host/MCP: ${CURSOR_HOST_TOOL_MANIFEST_SUMMARY}; configured MCP depends on Cursor settings.`,
 		"- Pi tool toggles affect pi tools/bridge exposure only; they do not disable Cursor host/configured MCP tools.",
 	];
-	const bridgeTools = includePiBridgeGuidance ? options.bridgeSnapshot?.tools ?? [] : [];
 	if (includePiBridgeGuidance) {
 		if (!piBridgeEnabled) {
 			lines.push("- Pi bridge: disabled (PI_CURSOR_PI_TOOL_BRIDGE=0).");
